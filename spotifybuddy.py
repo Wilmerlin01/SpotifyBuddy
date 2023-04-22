@@ -2,14 +2,14 @@ import tkinter as tk
 from tkinter import ttk
 import spotipy
 from spotipy.oauth2 import SpotifyOAuth
+import keyboard
+import subprocess
+import re
 import os
 import sys
 import pickle
 import threading
-import requests
-from base64 import b64encode
-import json
-from urllib.parse import urlencode
+
 
 def authenticate():
     try:
@@ -34,12 +34,29 @@ def authenticate_in_thread():
     t = threading.Thread(target=authenticate)
     t.start()
 
+def add_to_playlist():
+    #Add track to the playlist
+    track_info = sp.current_user_playing_track()
+    track_uri = track_info['item']['uri']
+
+    playlists = sp.current_user_playlists()
+    PLAYLIST_ID = var_dict['CURRENT_PLAYLIST_ID']
+    sp.playlist_add_items(playlist_id=PLAYLIST_ID, items=[track_uri])
+
+    #Get track name
+    track_name = track_info['item']['name']
+
+    console_log.config(state='normal')
+    console_log.insert('end', "Added | Song: " + track_name + " | Playlist: " + var_dict["CURRENT_PLAYLIST_NAME"] + "\n")
+    console_log.config(state='disabled')
+
 #Variables
 REDIRECT_URI = "http://localhost:8888/callback"
 var_dict = {
     "CLIENT_SECRET": "",
     "CLIENT_ID": "",
-    "CURRENT_PLAYLIST": "",
+    "CURRENT_PLAYLIST_NAME": "",
+    "CURRENT_PLAYLIST_ID": "",
     "BINDING_ADD_SONG": "",
     "BINDING_REMOVE_LAST_ADDED": ""
 }
@@ -104,8 +121,9 @@ if len(var_dict["BINDING_REMOVE_LAST_ADDED"]) != 0:
 playlists = sp.current_user_playlists()
 playlist_names = [playlist['name'] for playlist in playlists['items']]
 dropdown_playlists['values'] = playlist_names
-if len(var_dict["CURRENT_PLAYLIST"]) != 0:
-    dropdown_playlists.set(var_dict["CURRENT_PLAYLIST"])
+if len(var_dict["CURRENT_PLAYLIST_NAME"]) != 0:
+    dropdown_playlists.set(var_dict["CURRENT_PLAYLIST_NAME"])
+    dropdown_playlists.config(state='disabled')
 else:
     dropdown_playlists.set('')
 
@@ -140,19 +158,62 @@ def save_client_id():
         console_log.insert('end', error + "\n")
         console_log.config(state='disabled')
 
+def save_current_playlist(event):
+    var_dict["CURRENT_PLAYLIST_NAME"] = dropdown_playlists.get()
+    playlists = sp.current_user_playlists()
+    playlist_id = None
+    for playlist in playlists["items"]:
+        if playlist["name"] == var_dict["CURRENT_PLAYLIST_NAME"]:
+            playlist_id = playlist["id"]
+            break
+    var_dict["CURRENT_PLAYLIST_ID"] = playlist_id
+    dropdown_playlists.config(state='disabled')
+    print(var_dict["CURRENT_PLAYLIST_NAME"])
+    print(var_dict["CURRENT_PLAYLIST_ID"])
+
 def save_add_song_binding():
-    var_dict["BINDING_ADD_SONG"] = entry_add_song_binding.get()
-    print("Add Song Binding: ", var_dict["BINDING_ADD_SONG"])
-    entry_add_song_binding.config(state='disabled')
-    with open("saved_variables.pkl", "wb") as f:
-        pickle.dump(var_dict, f)
+    #check if key binding is valid
+    #this regex checks for modifier+modifier...+key
+    pattern1 = r"^(ctrl|alt|shift|win)(\+(ctrl|alt|shift|win))*\+([a-z]|[f1-24]|[0-9]|home|end|pgup|pgdn|insert|delete|up|down|left|right)$"
+    #this regex checks for one or more modifiers
+    pattern2 = r"^(ctrl|alt|shift|win)(\+(ctrl|alt|shift|win))*$"
+
+    new_binding = entry_add_song_binding.get()
+    if (re.match(pattern1, new_binding, re.IGNORECASE) or re.match(pattern2, new_binding, re.IGNORECASE)):
+        #unregister previous hotkey first
+        try:
+            keyboard.unregister_hotkey(var_dict["BINDING_ADD_SONG"])
+        except KeyError:
+            pass
+        var_dict["BINDING_ADD_SONG"] = new_binding
+        keyboard.add_hotkey(var_dict["BINDING_ADD_SONG"], add_to_playlist)
+        entry_add_song_binding.config(state='disabled')
+        console_log.config(state='normal')
+        console_log.insert('end', "Add Song Binding updated to " + "'" + var_dict["BINDING_ADD_SONG"] + "'" + "\n")
+        console_log.config(state='disabled')
+        with open("saved_variables.pkl", "wb") as f:
+            pickle.dump(var_dict, f)
+    else:
+        console_log.config(state='normal')
+        console_log.insert('end', "Invalid Keybinding: Format is key or key+key...etc" + "\n")
+        console_log.config(state='disabled')
+        entry_add_song_binding.delete(0, "end")
+        entry_add_song_binding.insert(0, var_dict["BINDING_ADD_SONG"])
+        entry_add_song_binding.config(state='disabled')
 
 def save_remove_last_added_binding():
     var_dict["BINDING_REMOVE_LAST_ADDED"] = entry_remove_last_added_binding.get()
-    print("Remove Last Added Binding: ", var_dict["BINDING_REMOVE_LAST_ADDED"])
     entry_remove_last_added_binding.config(state='disabled')
+    console_log.config(state='normal')
+    console_log.insert('end', "Remove Last Added Binding updated to " + "'" + var_dict["BINDING_REMOVE_LAST_ADDED"] + "'" + "\n")
+    console_log.config(state='disabled')
     with open("saved_variables.pkl", "wb") as f:
         pickle.dump(var_dict, f)
+
+def check_for_hotkeys():
+    if keyboard.is_pressed(var_dict["BINDING_ADD_SONG"]):
+        add_to_playlist()
+    root.after(100, check_for_hotkeys)
 
 # Bind the Entry widgets to functions
 entry_enter_client_secret.bind("<Button-1>", lambda event: entry_enter_client_secret.config(state='normal'))
@@ -160,6 +221,9 @@ entry_enter_client_id.bind("<Button-1>", lambda event: entry_enter_client_id.con
 
 button_save_client_secret = tk.Button(root, text="Save", command=save_client_secret)
 button_save_client_id = tk.Button(root, text="Save", command=save_client_id)
+
+dropdown_playlists.bind("<Button-1>", lambda event: dropdown_playlists.config(state='normal'))
+dropdown_playlists.bind("<<ComboboxSelected>>", save_current_playlist)
 
 entry_add_song_binding.bind("<Button-1>", lambda event: entry_add_song_binding.config(state='normal'))
 entry_remove_last_added_binding.bind("<Button-1>", lambda event: entry_remove_last_added_binding.config(state='normal'))
@@ -193,5 +257,7 @@ entry_remove_last_added_binding.grid(row=7, column=2)
 button_apply_remove_last_added_binding.grid(row=7, column=3)
 
 console_log.grid(row=8, column=1, columnspan=3)
+
+root.after(100, check_for_hotkeys)
 
 root.mainloop()
